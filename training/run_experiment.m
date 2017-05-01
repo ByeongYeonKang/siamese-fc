@@ -6,7 +6,7 @@ function run_experiment(imdb_video)
 
 	% Parameters that should have no effect on the result.
 	opts.prefetch = false;
-	opts.gpus = 1;
+	opts.gpus = [1 2];
 
 	% Parameters that should be recorded.
 	% opts.foo = 'bla';
