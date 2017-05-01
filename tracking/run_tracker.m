@@ -4,7 +4,7 @@ function run_tracker(video, visualization)
     %% Parameters that should have no effect on the result.
     params.video = video;
     params.visualization = visualization;
-    params.gpus = 1;
+    params.gpus = 0;
     %% Parameters that should be recorded.
     % params.foo = 'blah';
     %% Call the main tracking function

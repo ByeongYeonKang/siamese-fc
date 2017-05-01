@@ -43,6 +43,16 @@ function [im_patch, im_patch_original] = get_subwindow_tracking(im, pos, model_s
     xs = context_xmin : context_xmax;
     ys = context_ymin : context_ymax;
 
+%     frame = figure; 
+%     imshow(im./255.0);
+%     hold on;
+%     rectangle('Position', [context_xmin context_ymin context_xmax-context_xmin context_ymax-context_ymin],...
+%         'EdgeColor',[1 0 0],...
+%         'LineStyle','-.',...
+%         'LineWidth',1.0);
+%     frm = getframe(frame);
+%     imwrite(frm.cdata, 'file.jpg');
+    
     im_patch_original = im(ys, xs, :);
     if ~isequal(model_sz, original_sz)
         im_patch = imresize(im_patch_original, model_sz(1)/original_sz(1));

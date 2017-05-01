@@ -15,7 +15,7 @@ function bboxes = tracker(varargin)
     p.responseUp = 16; % upsampling the small 17x17 response helps with the accuracy
     p.windowing = 'cosine'; % to penalize large displacements
     p.wInfluence = 0.176; % windowing influence (in convex sum)
-    p.net = '2016-08-17.net.mat';
+    p.net = '2017-04-27_flow050.net.mat';
     %% execution, visualization, benchmark
     p.video = 'vot15_bag';
     p.visualization = false;
@@ -36,6 +36,7 @@ function bboxes = tracker(varargin)
     p.prefix_adj = 'adjust';
     p.id_feat_z = 'a_feat';
     p.id_score = 'score';
+    p.gt = true;
     % Overwrite default parameters with varargin
     p = vl_argparse(p, varargin);
 % -------------------------------------------------------------------------------------------------
@@ -50,9 +51,12 @@ function bboxes = tracker(varargin)
         stats = [];
     end
     % Load two copies of the pre-trained network
-    net_z = load_pretrained([p.net_base_path p.net], p.gpus);
+    % net_z = load_pretrained([p.net_base_path p.net], p.gpus);
+    net_z = load_pretrained([p.net_base_path p.net], []);
     net_x = load_pretrained([p.net_base_path p.net], []);
-    [imgFiles, targetPosition, targetSize] = load_video_info(p.seq_base_path, p.video);
+    % [imgFiles, targetPosition, targetSize] = load_video_info(p.seq_base_path, p.video);
+    [imgFiles, targetPosition, targetSize, video_path] = load_video_info2(p.seq_base_path, p.gt);
+    p.video = video_path;
     nImgs = numel(imgFiles);
     startFrame = 1;
     % Divide the net in 2
@@ -78,6 +82,16 @@ function bboxes = tracker(varargin)
     % get avg for padding
     avgChans = gather([mean(mean(im(:,:,1))) mean(mean(im(:,:,2))) mean(mean(im(:,:,3)))]);
 
+    if ~isdir([p.save_path p.video])
+        mkdir([p.save_path p.video])
+        mkdir([p.save_path p.video '/track'])
+        mkdir([p.save_path p.video '/score'])
+    end
+    
+    v = VideoWriter([p.save_path p.video]);
+    open(v);
+    
+    
     wc_z = targetSize(2) + p.contextAmount*sum(targetSize);
     hc_z = targetSize(1) + p.contextAmount*sum(targetSize);
     s_z = sqrt(wc_z*hc_z);
@@ -109,6 +123,7 @@ function bboxes = tracker(varargin)
     z_features = repmat(z_features, [1 1 1 p.numScale]);
 
     bboxes = zeros(nImgs, 4);
+   
     % start tracking
     tic;
     for i = startFrame:nImgs
@@ -123,8 +138,9 @@ function bboxes = tracker(varargin)
             scaledTarget = [targetSize(1) .* scales; targetSize(2) .* scales];
             % extract scaled crops for search region x at previous target position
             x_crops = make_scale_pyramid(im, targetPosition, scaledInstance, p.instanceSize, avgChans, stats, p);
+            imwrite(gather(x_crops(:,:,:,1))/255,[p.save_path p.video '/track/' num2str(i) '.jpg']);
             % evaluate the offline-trained network for exemplar x features
-            [newTargetPosition, newScale] = tracker_eval(net_x, round(s_x), scoreId, z_features, x_crops, targetPosition, window, p);
+            [newTargetPosition, newScale] = tracker_eval(net_x, round(s_x), scoreId, z_features, x_crops, targetPosition, window, p, i);
             targetPosition = gather(newTargetPosition);
             % scale damping and saturation
             s_x = max(min_s_x, min(max_s_x, (1-p.scaleLR)*s_x + p.scaleLR*scaledInstance(newScale)));
@@ -150,6 +166,7 @@ function bboxes = tracker(varargin)
                 im = insertShape(im, 'Rectangle', rectPosition, 'LineWidth', 4, 'Color', 'yellow');
                 % Display the annotated video frame using the video player object.
                 step(videoPlayer, im);
+                writeVideo(v, im);
             end
         end
 
@@ -158,7 +175,8 @@ function bboxes = tracker(varargin)
         end
 
     end
-
+    
     bboxes = bboxes(startFrame : i, :);
+    close(v);
 
 end

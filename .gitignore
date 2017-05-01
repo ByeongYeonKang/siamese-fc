@@ -8,4 +8,6 @@
 #remove_ws.sh
 imdb_video.mat
 optical_flow_stats.mat
+2016-08-17_gray025.net.mat
+2016-08-17_rgb050.net.mat
 >>>>>>> 5ff9bd20f2a6aa0a5b50c0a8a2f1c89bf8eca2af
