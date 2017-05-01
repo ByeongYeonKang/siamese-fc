@@ -5,18 +5,18 @@ function net = vid_create_net(varargin)
 % Used to generate the network described in  the paper
 % "Fully-Convolutional Siamese Networks for Object Tracking"
 % ----------------------------------------------------------------------------------------------------------------
-    opts.exemplarSize = [127 127];
-    opts.instanceSize = [255 255];
-    opts.scale = 1 ;
-    opts.initBias = 0.1 ;
-    opts.weightDecay = 1 ;
-    %opts.weightInitMethod = 'xavierimproved' ;
-    opts.weightInitMethod = 'gaussian';
-    opts.batchNormalization = false ;
-    opts.networkType = 'simplenn' ;
-    opts.strides = [2, 2, 1, 2] ;
-    opts.cudnnWorkspaceLimit = 1024*1024*1024 ; % 1GB
-    opts = vl_argparse(opts, varargin) ;
+%     opts.exemplarSize = [127 127];
+%     opts.instanceSize = [255 255];
+%     opts.scale = 1 ;
+%     opts.initBias = 0.1 ;
+%     opts.weightDecay = 1 ;
+%     %opts.weightInitMethod = 'xavierimproved' ;
+%     opts.weightInitMethod = 'gaussian';
+%     opts.batchNormalization = false ;
+%     opts.networkType = 'simplenn' ;
+%     opts.strides = [2, 2, 1, 2] ;
+%     opts.cudnnWorkspaceLimit = 1024*1024*1024 ; % 1GB
+%     opts = vl_argparse(opts, varargin) ;
 
     if numel(opts.exemplarSize) == 1
         opts.exemplarSize = [opts.exemplarSize, opts.exemplarSize];
