@@ -15,7 +15,7 @@ function bboxes = tracker(varargin)
     p.responseUp = 16; % upsampling the small 17x17 response helps with the accuracy
     p.windowing = 'cosine'; % to penalize large displacements
     p.wInfluence = 0.176; % windowing influence (in convex sum)
-    p.net = '2017-04-27_flow050.net.mat';
+    p.net = 'net-epoch-50.mat';
     %% execution, visualization, benchmark
     p.video = 'vot15_bag';
     p.visualization = false;
