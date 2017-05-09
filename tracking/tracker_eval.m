@@ -1,5 +1,5 @@
 % -------------------------------------------------------------------------------------------------------------------------
-function [newTargetPosition, bestScale] = tracker_eval(net_x, s_x, scoreId, z_features, x_crops, targetPosition, window, p, i)
+function [newTargetPosition, bestScale, responseMap] = tracker_eval(net_x, s_x, scoreId, z_features, x_crops, targetPosition, window, p)
 %TRACKER_STEP
 %   runs a forward pass of the search-region branch of the pre-trained Fully-Convolutional Siamese,
 %   reusing the features of the exemplar z computed at the first frame.
@@ -41,12 +41,11 @@ function [newTargetPosition, bestScale] = tracker_eval(net_x, s_x, scoreId, z_fe
     [r_max, c_max] = find(responseMap == max(responseMap(:)), 1);
     [r_max, c_max] = avoid_empty_position(r_max, c_max, p);
     p_corr = [r_max, c_max];
-    % 
-    minD = min(responseMap(:));
-    maxD = max(responseMap(:));
-    mapped_img = (gather(responseMap)-minD)./(maxD-minD);
-    imwrite(gather(mapped_img),[p.save_path p.video '/score/' num2str(i) '.jpg']);
     
+%     temp = round(p_corr./p.responseUp)
+%     z_features = net_z.vars(zFeatId).value;
+%     z_features = repmat(z_features, [1 1 1 p.numScale]);
+
     % Convert to crop-relative coordinates to frame coordinates
     % displacement from the center in instance final representation ...
     disp_instanceFinal = p_corr - ceil(p.scoreSize*p.responseUp/2);
