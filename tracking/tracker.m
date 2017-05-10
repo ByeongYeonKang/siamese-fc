@@ -6,21 +6,14 @@ function bboxes = tracker(varargin)
 %
 %   Luca Bertinetto, Jack Valmadre, Joao F. Henriques, 2016
 % -------------------------------------------------------------------------------------------------
+    
     % These are the default hyper-params for SiamFC-3S
     % The ones for SiamFC (5 scales) are in params-5s.txt
-    p.numScale = 3;
-    p.scaleStep = 1.0375;
-    p.scalePenalty = 0.9745;
-    p.scaleLR = 0.59; % damping factor for scale update
-    p.responseUp = 16; % upsampling the small 17x17 response helps with the accuracy
-    p.windowing = 'cosine'; % to penalize large displacements
-    p.wInfluence = 0.176; % windowing influence (in convex sum)
-    p.net = 'net-epoch-94.mat';
-%     p.net = '2016-08-17_rgb050.net.mat';
+    
     %% execution, visualization, benchmark
-    p.video = 'vot15_bag';
+    p.video = ' ';
     p.visualization = false;
-    p.gpus = 1;
+    p.gpus = 2;
     p.bbox_output = false;
     p.fout = -1;
     %% Params from the network architecture, have to be consistent with the training
@@ -44,6 +37,8 @@ function bboxes = tracker(varargin)
 
     % Get environment-specific default paths.
     p = env_paths_tracking(p);
+    p = params_3s(p);
+    
     % Load ImageNet Video statistics
     if exist(p.stats_path,'file')
         stats = load(p.stats_path);
@@ -52,9 +47,14 @@ function bboxes = tracker(varargin)
         stats = [];
     end
     % Load two copies of the pre-trained network
-    % net_z = load_pretrained([p.net_base_path p.net], p.gpus);
-    net_z = load_pretrained([p.net_base_path p.net], []);
-    net_x = load_pretrained([p.net_base_path p.net], []);
+%     net_z_rgb = load_pretrained([p.net_base_path p.net_rgb], p.gpus);
+    net_z_rgb = load_pretrained([p.net_base_path p.net_rgb], []);
+    net_x_rgb = load_pretrained([p.net_base_path p.net_rgb], []);
+    
+%     net_z_flow = load_pretrained([p.net_base_path p.net_flow], p.gpus);
+    net_z_flow = load_pretrained([p.net_base_path p.net_flow], []);
+    net_x_flow = load_pretrained([p.net_base_path p.net_flow], []);
+    
     % [imgFiles, targetPosition, targetSize] = load_video_info(p.seq_base_path, p.video);
     % flow model
     % [flowFiles, imgFiles, targetPosition, targetSize, video_path] = load_video_info2(p.seq_base_path, p.gt);
@@ -67,43 +67,53 @@ function bboxes = tracker(varargin)
     startFrame = 1;
     % Divide the net in 2
     % exemplar branch (used only once per video) computes features for the target
-    remove_layers_from_prefix(net_z, p.prefix_x);
-    remove_layers_from_prefix(net_z, p.prefix_join);
-    remove_layers_from_prefix(net_z, p.prefix_adj);
+    remove_layers_from_prefix(net_z_rgb, p.prefix_x);
+    remove_layers_from_prefix(net_z_rgb, p.prefix_join);
+    remove_layers_from_prefix(net_z_rgb, p.prefix_adj);
     % instance branch computes features for search region x and cross-correlates with z features
-    remove_layers_from_prefix(net_x, p.prefix_z);
-    zFeatId = net_z.getVarIndex(p.id_feat_z);
-    scoreId = net_x.getVarIndex(p.id_score);
+    remove_layers_from_prefix(net_x_rgb, p.prefix_z);
+    zFeatId = net_z_rgb.getVarIndex(p.id_feat_z);
+    scoreId = net_x_rgb.getVarIndex(p.id_score);
+    
+    % Divide the net in 2
+    % exemplar branch (used only once per video) computes features for the target
+    remove_layers_from_prefix(net_z_flow, p.prefix_x);
+    remove_layers_from_prefix(net_z_flow, p.prefix_join);
+    remove_layers_from_prefix(net_z_flow, p.prefix_adj);
+    % instance branch computes features for search region x and cross-correlates with z features
+    remove_layers_from_prefix(net_x_flow, p.prefix_z);
+    
     % get the first frame of the video
     flow = gpuArray(single(flowFiles{startFrame}));
-    im = gpuArray(single(imgFiles{startFrame+1}));
+    im = gpuArray(single(imgFiles{startFrame}));
+    
     % if grayscale repeat one channel to match filters size
-	if(size(flow, 3)==1)
-        flow = repmat(flow, [1 1 3]);
+	if(size(im, 3)==1)
+        im = repmat(im, [1 1 3]);
     end
     % Init visualization
     videoPlayer = [];
     if p.visualization && isToolboxAvailable('Computer Vision System Toolbox')
-        videoPlayer = vision.VideoPlayer('Position', [100 100 [size(flow,2), size(flow,1)]+30]);
+        videoPlayer = vision.VideoPlayer('Position', [100 100 [size(im,2), size(im,1)]+30]);
     end
     % get avg for padding
-    avgChans = gather([mean(mean(flow(:,:,1))) mean(mean(flow(:,:,2))) mean(mean(flow(:,:,3)))]);
+    avgChans = gather([mean(mean(im(:,:,1))) mean(mean(im(:,:,2))) mean(mean(im(:,:,3)))]);
 
-    if ~isdir([p.save_path p.net '/' p.video])
-        mkdir([p.save_path p.net '/' p.video])
+    if ~isdir([p.save_path 'two-stream/' p.video])
+        mkdir([p.save_path 'two-stream/' p.video])
 %         mkdir([p.save_path p.net '/' p.video '/track'])
 %         mkdir([p.save_path p.net '/' p.video '/score'])
     end
     
-    v_img = VideoWriter([p.save_path p.net '/' p.video '/rgb']);
+    v_img = VideoWriter([p.save_path 'two-stream/' p.video '/rgb']);
     open(v_img);
-    v_flow = VideoWriter([p.save_path p.net '/' p.video '/flow']);
+    v_flow = VideoWriter([p.save_path 'two-stream/' p.video '/flow']);
     open(v_flow);
-    v_score = VideoWriter([p.save_path p.net '/' p.video '/full_score']);
-    open(v_score);
-    v_x_score = VideoWriter([p.save_path p.net '/' p.video '/crop_score']);
+%     v_score = VideoWriter([p.save_path 'two-stream/' p.video '/full_score']);
+%     open(v_score);
+    v_x_score = VideoWriter([p.save_path 'two-stream/' p.video '/crop_score']);
     open(v_x_score);
-    v_x_crop = VideoWriter([p.save_path p.net '/' p.video '/crop']);
+    v_x_crop = VideoWriter([p.save_path 'two-stream/' p.video '/crop']);
     open(v_x_crop);
 
     wc_z = targetSize(2) + p.contextAmount*sum(targetSize);
@@ -111,7 +121,7 @@ function bboxes = tracker(varargin)
     s_z = sqrt(wc_z*hc_z);
     scale_z = p.exemplarSize / s_z;
     % initialize the exemplar
-    [z_crop, ~] = get_subwindow_tracking(flow, targetPosition, [p.exemplarSize p.exemplarSize], [round(s_z) round(s_z)], avgChans);
+    [z_crop, ~] = get_subwindow_tracking(im, targetPosition, [p.exemplarSize p.exemplarSize], [round(s_z) round(s_z)], avgChans);
     if p.subMean
         z_crop = bsxfun(@minus, z_crop, reshape(stats.z.rgbMean, [1 1 3]));
     end
@@ -132,9 +142,9 @@ function bboxes = tracker(varargin)
     window = window / sum(window(:));
     scales = (p.scaleStep .^ ((ceil(p.numScale/2)-p.numScale) : floor(p.numScale/2)));
     % evaluate the offline-trained network for exemplar z features
-    net_z.eval({'exemplar', z_crop});
-    z_features = net_z.vars(zFeatId).value;
-    z_features = repmat(z_features, [1 1 1 p.numScale]);
+    net_z_rgb.eval({'exemplar', z_crop});
+    z_features_rgb = net_z_rgb.vars(zFeatId).value;
+    z_features_rgb = repmat(z_features_rgb, [1 1 1 p.numScale]);
 
     bboxes = zeros(nImgs, 4);
    
@@ -143,10 +153,15 @@ function bboxes = tracker(varargin)
     for i = startFrame:nImgs
         if i>startFrame
             % load new frame on GPU
-            flow = gpuArray(single(flowFiles{i}));
-            
+            flow = gpuArray(single(flowFiles{i}));   
             % load new frame on GPU
-            im = gpuArray(single(imgFiles{i+1}));
+            im = gpuArray(single(imgFiles{i}));
+            
+            if(startFrame==1)
+                net_z_flow.eval({'exemplar', z_crop});
+                z_features_flow = net_z_flow.vars(zFeatId).value;
+                z_features_flow = repmat(z_features_flow, [1 1 1 p.numScale]);
+            end
             
    			% if grayscale repeat one channel to match filters size
     		if(size(flow, 3)==1)
@@ -154,16 +169,20 @@ function bboxes = tracker(varargin)
     		end
             scaledInstance = s_x .* scales;
             scaledTarget = [targetSize(1) .* scales; targetSize(2) .* scales];
+            
             % extract scaled crops for search region x at previous target position
-            x_crops = make_scale_pyramid(flow, targetPosition, scaledInstance, p.instanceSize, avgChans, stats, p);
+            x_crops_rgb = make_scale_pyramid(im, targetPosition, scaledInstance, p.instanceSize, avgChans, stats, p);
+            x_crops_flow = make_scale_pyramid(flow, targetPosition, scaledInstance, p.instanceSize, avgChans, stats, p);
+            
             % imwrite(gather(x_crops(:,:,:,1))/255,[p.save_path p.net '/' p.video '/track/' num2str(i) '.jpg']);
             % evaluate the offline-trained network for exemplar x features
-            [newTargetPosition, newScale, scoreMap] = tracker_eval(net_x, round(s_x), scoreId, z_features, x_crops, targetPosition, window, p);
+            %[newTargetPosition, newScale, scoreMap] = tracker_eval(net_x_rgb, round(s_x), scoreId, z_features_rgb, x_crops_rgb, targetPosition, window, p);
+            [newTargetPosition, newScale, scoreMap] = two_tracker_eval(net_x_rgb, net_x_flow, round(s_x), scoreId, z_features_rgb, z_features_flow, x_crops_rgb, x_crops_flow, targetPosition, window, p);
             targetPosition = gather(newTargetPosition);
             % scale damping and saturation
             s_x = max(min_s_x, min(max_s_x, (1-p.scaleLR)*s_x + p.scaleLR*scaledInstance(newScale)));
             targetSize = (1-p.scaleLR)*targetSize + p.scaleLR*[scaledTarget(1,newScale) scaledTarget(2,newScale)];
-            vis_crop = gather(x_crops(:,:,:,newScale));
+            vis_crop = gather(x_crops_rgb(:,:,:,newScale));
             writeVideo(v_x_crop, mat2gray(vis_crop));
             vis_score_map(scoreMap, targetPosition, targetSize, v_x_score);
         else
@@ -183,7 +202,7 @@ function bboxes = tracker(varargin)
                 drawnow
                 fprintf('Frame %d\n', startFrame+i);
             else
-                score_vis(net_x, scoreId, z_features, flow, rectPosition, p, v_score);
+%                 score_vis(net_x_rgb, scoreId, z_features, flow, rectPosition, p, v_score);
                 im = gather(im)/255;
                 im = insertShape(im, 'Rectangle', rectPosition, 'LineWidth', 4, 'Color', 'yellow');
                 % Display the annotated video frame using the video player object.
@@ -205,7 +224,7 @@ function bboxes = tracker(varargin)
     bboxes = bboxes(startFrame : i, :);
     close(v_img);
     close(v_flow);
-    close(v_score);
+%     close(v_score);
     close(v_x_crop);
     close(v_x_score);
 

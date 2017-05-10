@@ -42,6 +42,11 @@ function [newTargetPosition, bestScale, responseMap] = tracker_eval(net_x, s_x, 
     [r_max, c_max] = avoid_empty_position(r_max, c_max, p);
     p_corr = [r_max, c_max];
     
+    minD = min(responseMap(:));
+    maxD = max(responseMap(:));
+    responseMap=gather(responseMap);
+    figure; imshow(imadjust(responseMap,[minD; maxD],[0; 1]));
+    
 %     temp = round(p_corr./p.responseUp)
 %     z_features = net_z.vars(zFeatId).value;
 %     z_features = repmat(z_features, [1 1 1 p.numScale]);
