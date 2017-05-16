@@ -66,12 +66,12 @@ function imdb_video = vid_setup_data(root)
         fprintf('Found %d valid objects in %d frames\n', imdb_video.n_valid_objects(v), imdb_video.nframes(v));
     end
     % to_delete: videos which contains trackids with only one valid object
-    to_delete1 = find(imdb_video.n_valid_objects < 2);
-    imdb_video = delete_from_imdb(imdb_video, to_delete1);
+%     to_delete1 = find(imdb_video.n_valid_objects < 2);
+%     imdb_video = delete_from_imdb(imdb_video, to_delete1);
     % to_delete: videos which only contains trackids with only one valid object
-    [~, to_delete2] = find(imdb_video.valid_trackids==1);
-    to_delete2 = unique(to_delete2);
-    imdb_video = delete_from_imdb(imdb_video, to_delete2);
+%     [~, to_delete2] = find(imdb_video.valid_trackids==1);
+%     to_delete2 = unique(to_delete2);
+%     imdb_video = delete_from_imdb(imdb_video, to_delete2);
     save('imdb_video.mat', '-struct', 'imdb_video', '-v7.3');
 end
 
@@ -103,7 +103,7 @@ function imdb = delete_from_imdb(imdb, to_delete)
     imdb.id(to_delete) = [];
     imdb.path(to_delete) = [];
     imdb.nframes(to_delete) = [];
-%     imdb.set(to_delete) = [];
+    imdb.set(to_delete) = [];
     imdb.n_valid_objects(to_delete) = [];
     imdb.objects(to_delete) = [];
     imdb.valid_trackids(:,to_delete) = [];

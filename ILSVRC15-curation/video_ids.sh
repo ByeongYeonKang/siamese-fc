@@ -6,7 +6,7 @@
 rm vid_id_frames.txt
 
 rootdir=$1
-datadir='ILSVRC2015/Data/VID/train'
+datadir='Data/VID/train'
 cnt=1
 
 for l1 in `ls $rootdir/$datadir`
@@ -18,4 +18,3 @@ do
 		cnt=$((cnt+1))
 	done
 done >> vid_id_frames.txt
-

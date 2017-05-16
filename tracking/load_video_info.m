@@ -14,7 +14,7 @@ function [imgs, pos, target_sz] = load_video_info(base_path, video)
 	if base_path(end) ~= '/' && base_path(end) ~= '\',
 		base_path(end+1) = '/';
 	end
-	video_path = [base_path video '/imgs/'];
+	video_path = [base_path video '/'];
 
 	%load ground truth from text file
 	ground_truth = csvread([base_path '/' video '/' 'groundtruth.txt']);

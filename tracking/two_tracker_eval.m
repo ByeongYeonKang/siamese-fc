@@ -1,4 +1,4 @@
-function [newTargetPosition, bestScale, responseMap] = two_tracker_eval(net_x_rgb, net_x_flow, s_x, scoreId, z_features_rgb, z_features_flow, x_crops_rgb, x_crops_flow, targetPosition, window, p)
+function [newTargetPosition, bestScale_flow, responseMap] = two_tracker_eval(net_x_rgb, net_x_flow, s_x, scoreId, z_features_rgb, z_features_flow, x_crops_rgb, x_crops_flow, targetPosition, window, p)
 %TRACKER_STEP
 %   runs a forward pass of the search-region branch of the pre-trained Fully-Convolutional Siamese,
 %   reusing the features of the exemplar z computed at the first frame.
@@ -12,7 +12,7 @@ function [newTargetPosition, bestScale, responseMap] = two_tracker_eval(net_x_rg
     responseMaps_rgb = reshape(net_x_rgb.vars(scoreId).value, [p.scoreSize p.scoreSize p.numScale]);
     responseMaps_flow = reshape(net_x_flow.vars(scoreId).value, [p.scoreSize p.scoreSize p.numScale]);
     
-    [responseMap_rgb, bestScale] = choose_scale(p,responseMaps_rgb);
+    [responseMap_rgb, bestScale_rgb] = choose_scale(p,responseMaps_rgb);
     [responseMap_flow, bestScale_flow] = choose_scale(p,responseMaps_flow);
     
     % make the response map sum to 1
@@ -23,7 +23,8 @@ function [newTargetPosition, bestScale, responseMap] = two_tracker_eval(net_x_rg
     responseMap_flow = responseMap_flow - min(responseMap_flow(:));
     responseMap_flow = responseMap_flow / sum(responseMap_flow(:));
     
-    responseMap = responseMap_flow + responseMap_rgb;
+    %responseMap = responseMap_flow + responseMap_rgb;
+    responseMap = responseMap_flow;
     
     % apply windowing
     responseMap = (1-p.wInfluence)*responseMap + p.wInfluence*window;

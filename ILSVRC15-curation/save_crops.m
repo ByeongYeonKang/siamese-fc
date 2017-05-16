@@ -3,8 +3,8 @@ function save_crops(imdb_video,v_1,v_end, root_original, root_crops)
     % Extract and save crops from video v_1 (start from 1) to v_end (check num video in imdb)
 	% e.g. save_crops(imdb_video, 1, 1000, '/path/to/original/ILSVRC15/', '/path/to/new/curated/ILSVRC15/')
 % -------------------------------------------------------------------------------------------------------------------
-    rootDataDir_src = [root_original '/Data/VID/train/'];
-    rootDataDir_dest = [root_crops '/Data/VID/train/'];
+    rootDataDir_src = [root_original 'Data/VID/train/'];
+    rootDataDir_dest = [root_crops 'Data/VID/train/'];
     % sides of the crops for z and x saved on disk
     exemplar_size = 127;
     instance_size = 255;
@@ -19,20 +19,13 @@ function save_crops(imdb_video,v_1,v_end, root_original, root_crops)
                 obj = imdb_video.objects{v}{valid_objects(o)};
                 assert(obj.valid)
                 fprintf('%d %d: %s\n', v, obj.track_id, obj.frame_path);
-
-                root = [rootDataDir_dest strrep(obj.frame_path,'.JPEG','') '.' num2str(obj.track_id,'%02d')];
-                
-                 if exist([root '.crop.x.jpg'])==2
-                     continue;
-                 end     
-                
                 im = imread([rootDataDir_src obj.frame_path]);
 
+                [im_crop_z, bbox_z, pad_z, im_crop_x, bbox_x, pad_x] = get_crops(im, obj, exemplar_size, instance_size, context_amount);
+
+                root = [rootDataDir_dest strrep(obj.frame_path,'.JPEG','') '.' num2str(obj.track_id,'%02d')];
                 pz = fopen([root '.pad.z.txt'],'w');
                 px = fopen([root '.pad.x.txt'],'w');
-                
-                [im_crop_z, bbox_z, pad_z, im_crop_x, bbox_x, pad_x] = get_crops(im, obj, exemplar_size, instance_size, context_amount);
-                
                 fprintf(pz,'%.2f,%.2f,%.2f,%.2f\n', pad_z(1),pad_z(2),pad_z(3),pad_z(4));
                 fprintf(px,'%.2f,%.2f,%.2f,%.2f\n', pad_x(1),pad_x(2),pad_x(3),pad_x(4));
                 fclose(pz);

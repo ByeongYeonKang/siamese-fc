@@ -5,6 +5,7 @@ function per_frame_annotation(root, folder_index)
 % e.g. per_frame_annotations('/path/to/ILSVRC2015/', 0)
 % --------------------------------------------------------------------------
 
+
     addpath(genpath('../..'));
     i = folder_index + 3;
 
