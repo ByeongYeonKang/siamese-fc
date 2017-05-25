@@ -1,5 +1,5 @@
 % -------------------------------------------------------------------------------------------------
-function result = tracker(varargin)
+function bboxes = tracker(varargin)
 %TRACKER
 %   is the main function that performs the tracking loop
 %   Default parameters are overwritten by VARARGIN
@@ -19,10 +19,10 @@ function result = tracker(varargin)
     p.visualization = false;
     p.gpus = [];
     %%
-    p.saveVideos = false;
-    p.getRect = false;
-    % p.bbox_output = false;
-    % p.fout = -1;
+    p.subMean = true;
+    p.bbox_output = false;
+    p.video_output = false;
+    p.fout = -1;
     %% Params from the network architecture, have to be consistent with the training
     p.exemplarSize = 127;  % input z size
     p.instanceSize = 255;  % input x size (search region)
@@ -46,30 +46,35 @@ function result = tracker(varargin)
     % p = params_5s(p);
     
     %% init u can select option, rgb or flow or two-stream(rgb and flow)
-    RGB = 1; 
-    flow = 2;
-    p.net = {p.net_rgb ,p.net_flow}; 
-    p.stats_path = {p.stats_rgb_path, p.stats_flow_path}; 
-    % useNets = {RGB, flow};
-    useNets = {RGB};
-    imgFiles = struct();
-    result = struct();
+    net = struct();
+    useNets = {'RGB', 'flow'};
+    net_path = {[p.net_base_path p.net_rgb] ,[p.net_base_path p.net_flow]}; 
+    stats_path = {p.stats_rgb_path, p.stats_flow_path};
+    data_path = {p.data_rgb_path, p.data_flow_path};
+    bbox_path = {p.rgb_bbox, p.flow_bbox};
+    for i=1:length(useNets)
+        net(i).name = useNets{i};
+        net(i).path = net_path{i};
+        net(i).stats_path = stats_path{i};
+        net(i).data_path = data_path{i};
+    end
     
     %% init model setting 
     for i= 1:length(useNets)
         % Load ImageNet Video statistics
-        if exist(p.stats_path{i},'file')
-            stats(i) = load(p.stats_path{i});
+        if exist(net(i).stats_path,'file')
+            net(i).stats = load(net(i).stats_path);
         else
-            warning('No stats found at %s', p.stats_path{i});
-            stats(i) = [];
+            warning('No stats found at %s', net(i).stats_path);
+            net(i).stats = [];
         end
 
         % Load two copies of the pre-trained network 
-        net_z(i) = load_pretrained([p.net_base_path p.net{i}], []);
-        net_x(i) = load_pretrained([p.net_base_path p.net{i}], []);
+        net_z(i) = load_pretrained(net(i).path, []);
+        net_x(i) = load_pretrained(net(i).path, []);
         
-        [imgFiles, targetPosition, targetSize] = load_video_info(p.seq_base_path, p.video);
+        [net(i).imgFiles, net(i).targetPosition(1,:), net(i).targetSize(1,:)] = load_video_info(net(i).data_path, p.video);
+        
         % [imgFiles(i), targetPosition(i), targetSize(i), video_path] = load_video_info2(p.seq_base_path, p.gt);
         
         % Divide the net in 2
@@ -84,8 +89,8 @@ function result = tracker(varargin)
 
         % get the first frame of the video
         startFrame = 1;
-        nImgs = numel(imgFiles);
-        im = gpuArray(single(imgFiles{startFrame}));
+        net(i).nImgs = numel(net(i).imgFiles);
+        im = gpuArray(single(net(i).imgFiles{startFrame}));
         
         % if grayscale repeat one channel to match filters size
         if(size(im, 3)==1)
@@ -93,23 +98,23 @@ function result = tracker(varargin)
         end
     
         % get avg for padding
-        avgChans = gather([mean(mean(im(:,:,1))) mean(mean(im(:,:,2))) mean(mean(im(:,:,3)))]);
+        net(i).avgChans = gather([mean(mean(im(:,:,1))) mean(mean(im(:,:,2))) mean(mean(im(:,:,3)))]);
 
-        wc_z = targetSize(2) + p.contextAmount*sum(targetSize);
-        hc_z = targetSize(1) + p.contextAmount*sum(targetSize);
+        wc_z = net(i).targetSize(1,2) + p.contextAmount*sum(net(i).targetSize(1,:));
+        hc_z = net(i).targetSize(1,1) + p.contextAmount*sum(net(i).targetSize(1,:));
         s_z = sqrt(wc_z*hc_z);
         scale_z = p.exemplarSize / s_z;
         % initialize the exemplar
-        [z_crop, ~] = get_subwindow_tracking(im, targetPosition, [p.exemplarSize p.exemplarSize], [round(s_z) round(s_z)], avgChans);
+        [z_crop, ~] = get_subwindow_tracking(im, net(i).targetPosition, [p.exemplarSize p.exemplarSize], [round(s_z) round(s_z)], net(i).avgChans);
         if p.subMean
-            z_crop = bsxfun(@minus, z_crop, reshape(stats.z.rgbMean, [1 1 3]));
+            z_crop = bsxfun(@minus, z_crop, reshape(net(i).stats.z.rgbMean, [1 1 3]));
         end
         d_search = (p.instanceSize - p.exemplarSize)/2;
         pad = d_search/scale_z;
-        s_x = s_z + 2*pad;
+        net(i).s_x(1) = s_z + 2*pad;
         % arbitrary scale saturation
-        min_s_x = 0.2*s_x;
-        max_s_x = 5*s_x;
+        min_s_x = 0.2*net(i).s_x(1);
+        max_s_x = 5*net(i).s_x(1);
 
         switch p.windowing
             case 'cosine'
@@ -122,166 +127,116 @@ function result = tracker(varargin)
         scales = (p.scaleStep .^ ((ceil(p.numScale/2)-p.numScale) : floor(p.numScale/2)));
         % evaluate the offline-trained network for exemplar z features
         net_z(i).eval({'exemplar', z_crop});
-        z_features(i) = net_z_rgb.vars(zFeatId).value;
-        z_features(i) = repmat(z_features(i), [1 1 1 p.numScale]);
+        net(i).z_features = net_z(i).vars(zFeatId).value;
+        net(i).z_features = repmat(net(i).z_features, [1 1 1 p.numScale]);
+        
+        net(i).bboxes = zeros(net(i).nImgs, 4);
+        if p.bbox_output 
+            p.fout(i) = fopen([p.save_path p.video '/' bbox_path{i}], 'w');
+        end
     end
-    %%
-    gt_path = ['../dataset/OTB/' p.video];
-    gt_file = '/groundtruth_rect.txt';
-    gt = importdata([gt_path gt_file]);
-    
-    % Init visualization
+    %% Init visualization for debug
+    p.save_path = [p.save_path p.video];
+    if ~isdir(p.save_path)
+        mkdir(p.save_path)
+    end
     videoPlayer = [];
     if p.visualization && isToolboxAvailable('Computer Vision System Toolbox')
         videoPlayer = vision.VideoPlayer('Position', [100 100 [size(im,2), size(im,1)]+30]);
     end
-    
-    p.save_path = [p.save_path p.net_flow '/' p.video];
-    if ~isdir(p.save_path)
-        mkdir(p.save_path)
+    if p.video_output
+        result_video = VideoWriter([p.save_path '/results_videos_of']);
+        open(result_video);
     end
-    
-    if p.visualization
-        v_tracking = VideoWriter([p.save_path '/tracking_results']);
-        open(v_tracking);
-    end
-    
-    bboxes = zeros(nImgs, 4);
-   
-    targetPosition_rgb = targetPosition; 
-    targetSize_rgb = targetSize;
-    targetPosition_flow = targetPosition; 
-    targetSize_flow = targetSize;
-    rectPosition_gt = zeros(nImgs,4);
-    
-    % start tracking
+    %% start tracking
     tic;
-    for i = startFrame:nImgs          
+    for i = startFrame:net(2).nImgs          
         if i>startFrame
             % load new frame on GPU
-            im = gpuArray(single(imgFiles{i}));
-   			% if grayscale repeat one channel to match filters size
-            if(size(im, 3)==1)
-        		im = repmat(im, [1 1 3]);
+            % targetPosition, s_x, targetSize is pre-valued 
+            for ii=1:length(useNets)
+%                 if ii==1
+%                     im = gpuArray(single(net(ii).imgFiles{i-1}));
+%                     [z_crop, ~] = get_subwindow_tracking(im, net(ii).targetPosition(i-1,:), [p.exemplarSize p.exemplarSize], [round(s_z) round(s_z)], net(ii).avgChans);
+%                     net_z(ii).eval({'exemplar', z_crop});
+%                     net(ii).z_features = net_z(ii).vars(zFeatId).value;
+%                     net(ii).z_features = repmat(net(ii).z_features, [1 1 1 p.numScale]);
+%                 end
+                im = gpuArray(single(net(ii).imgFiles{i}));
+                % if grayscale repeat one channel to match filters size
+                if(size(im, 3)==1)
+                    im = repmat(im, [1 1 3]);
+                end
+                scaledInstance = net(ii).s_x(i-1) .* scales;
+                scaledTarget = [net(ii).targetSize(i-1,1) .* scales; net(ii).targetSize(i-1,2) .* scales];
+                % extract scaled crops for search region x at previous target position
+                [x_crops, net(ii).image_coord_roi, net(ii).score_coord_roi] = make_scale_pyramid(im, net(ii).targetPosition(i-1,:), scaledInstance, p.instanceSize, net(ii).avgChans, net(ii).stats, p);
+                % evaluate the offline-trained network for exemplar x features
+                [newTargetPosition, newScale, scoreMap] = tracker_eval(net_x(ii), round(net(ii).s_x(i-1)), scoreId, net(ii).z_features, x_crops, net(ii).targetPosition(i-1,:), window, p);
+                net(ii).targetPosition(i,:) = gather(newTargetPosition);
+                scoreMap = imresize(scoreMap, net(ii).image_coord_roi(5)/size(scoreMap,1));
+                scoreMap = scoreMap - min(scoreMap(:)) ;
+                scoreMap = scoreMap / max(scoreMap(:)) ;
+                N = 256;
+                IN = round(N * (scoreMap-min(scoreMap(:)))/(max(scoreMap(:))-min(scoreMap(:))));
+                cmap = jet(N); % see also hot, etc.
+                scoreMap = ind2rgb(IN,cmap);
+                yy = net(ii).score_coord_roi(2): net(ii).score_coord_roi(4);
+                xx = net(ii).score_coord_roi(1): net(ii).score_coord_roi(3);
+                net(ii).map = scoreMap(yy,xx,:);
+                
+                % scale damping and saturation
+                net(ii).s_x(i) = max(min_s_x, min(max_s_x, (1-p.scaleLR)*net(ii).s_x(i-1) + p.scaleLR*scaledInstance(newScale)));
+                net(ii).targetSize(i,:) = (1-p.scaleLR)*net(ii).targetSize(i-1,:) + p.scaleLR*[scaledTarget(1,newScale) scaledTarget(2,newScale)];
             end
-            scaledInstance = s_x_rgb .* scales;
-            scaledTarget = [targetSize(1) .* scales; targetSize(2) .* scales];
-            % extract scaled crops for search region x at previous target position
-            x_crops = make_scale_pyramid(im, targetPosition, scaledInstance, p.instanceSize, avgChans, stats, p);
-            % evaluate the offline-trained network for exemplar x features
-            [newTargetPosition, newScale] = tracker_eval(net_x, round(s_x), scoreId, z_features, x_crops, targetPosition, window, p);
-            targetPosition = gather(newTargetPosition);
-            % imwrite(gather(x_crops(:,:,:,1))/255,[p.save_path p.net '/' p.video '/track/' num2str(i) '.jpg']);
-            % evaluate the offline-trained network for exemplar x features
-            %[newTargetPosition, newScale, scoreMap] = tracker_eval(net_x_rgb, round(s_x), scoreId, z_features_rgb, x_crops_rgb, targetPosition, window, p);
-            % [newTargetPosition_rgb, newScale_rgb] = tracker_eval(net_x_rgb, round(s_x_rgb), scoreId, z_features_rgb, x_crops_rgb, targetPosition_rgb, window, p);
-            %[newTargetPosition_flow, newScale_flow] = tracker_eval(net_x_flow, round(s_x_flow), scoreId, z_features_flow, x_crops_flow, targetPosition_flow, window, p);
-            %[newTargetPosition, newScale, scoreMap] = two_tracker_eval(net_x_rgb, net_x_flow, round(s_x), scoreId, z_features_rgb, z_features_flow, x_crops_rgb, x_crops_flow, targetPosition, window, p);
-            
-            % scale damping and saturation
-            s_x = max(min_s_x, min(max_s_x, (1-p.scaleLR)*s_x + p.scaleLR*scaledInstance(newScale)));
-            targetSize = (1-p.scaleLR)*targetSize + p.scaleLR*[scaledTarget(1,newScale) scaledTarget(2,newScale)];
-            % vis_crop = gather(x_crops_rgb(:,:,:,newScale));
-            % writeVideo(v_x_crop, mat2gray(vis_crop));
-            % vis_score_map(scoreMap, targetPosition, targetSize, v_x_score);
         else
             
         end
-        
-%         if ~isnan(gt(i,1))
-%             rectPosition_gt = gt(i,:);
-%             [cx, cy, w, h] = get_axis_aligned_BB(rectPosition_gt);
-%             targetPosition_gt = [cy cx]; % centre of the bounding box
-%             % targetSize_gt = [h w];    
-%         end
-        rectPosition = [targetPosition([2,1]) - targetSize([2,1])/2, targetSize([2,1])];
-        bboxes(i, :) = rectPosition;
 
         if p.visualization
             if isempty(videoPlayer)
-                figure(1), imshow(flow/255);
-                figure(1), rectangle('Position', rectPosition, 'LineWidth', 4, 'EdgeColor', 'y');
-                drawnow
-                fprintf('Frame %d\n', startFrame+i);
-            else
-                % score_vis(net_x_rgb, scoreId, z_features, flow, rectPosition, p, v_score);
-                im = gather(im)/255;
-                im = insertShape(im, 'Rectangle', rectPosition_gt, ...
-                    'LineWidth', 4, 'Color', 'red');
-                im = insertShape(im, 'Rectangle', rectPosition_rgb, ...
-                    'LineWidth', 4, 'Color', 'green');
-                im = insertShape(im, 'Rectangle', rectPosition_flow, ...
-                    'LineWidth', 4, 'Color','blue');
-                
-                text_str = cell(2,1);
-                overlap_ratio = [bboxOverlapRatio(rectPosition_gt,...
-                    rectPosition_rgb, 'Union') ...
-                    bboxOverlapRatio(rectPosition_gt,...
-                    rectPosition_flow, 'Union') ];
-                distance = [sqrt((targetPosition_rgb(1)-targetPosition_gt(1)).^2)+ ...
-                    sqrt((targetPosition_rgb(2)-targetPosition_gt(2)).^2), ...
-                    sqrt((targetPosition_flow(1)-targetPosition_gt(1)).^2)+ ...
-                    sqrt((targetPosition_flow(2)-targetPosition_gt(2)).^2)];
-                for ii=1:2
-                   text_str{ii} = ['IoU:' num2str(overlap_ratio(ii),'%0.2f') '%', ' Dist:' num2str(distance(ii),'%0.2f')];
+                for ii=1:length(useNets)
+%                     figure(1), imshow(flow/255);
+%                     figure(1), rectangle('Position', rectPosition, 'LineWidth', 4, 'EdgeColor', 'y');
+%                     drawnow
+                    fprintf('Frame %d\n', startFrame+i);
                 end
-                position = [size(im,2)-150 size(im,1)-80; size(im,2)-150 size(im,1)-60];
-                box_color = {'green','blue'};
-                im = insertText(im, position,text_str,'FontSize',8,'BoxColor',...
-                    box_color,'BoxOpacity',0.4,'TextColor','white');
+            else
+                im = gpuArray(single(net(1).imgFiles{i}));
+                im = gather(im)/255;
+                color = {'red', 'blue'};
+                for ii=1:length(useNets)
+                    rectPosition = [net(ii).targetPosition(i,[2,1]) - net(ii).targetSize(i,[2,1])/2, net(ii).targetSize(i,[2,1])];
+                    im = insertShape(im, 'Rectangle', gather(rectPosition), ...
+                        'LineWidth', 6, 'Color', color{ii});
+                end
+                % Draw Search-region and score map
+                if i>startFrame
+                    z = 1;
+                    rect = net(z).image_coord_roi;
+                    alpha = 0.8;
+                    s_map = zeros(size(im));
+                    s_map(rect(2):rect(4),rect(1):rect(3),:)=net(z).map;
+                    im = im * (1-alpha) + s_map*alpha;
+                    im = insertShape(im, 'Rectangle', [rect(1), rect(2), rect(3)-rect(1), rect(4)-rect(2)], ...
+                        'LineWidth', 5, 'Color', 'green');
+                end
                 
                 % Display the annotated video frame using the video player object.
                 step(videoPlayer, im);
-                writeVideo(v_tracking, im);
+                writeVideo(result_video, im);
             end
         end
-
         if p.bbox_output
-            result.GT.bbox(i,:) = rectPosition_gt;
-            result.GT.center(i,:) = targetPosition_gt;
-            result.TR_RGB.bbox(i,:) = rectPosition_rgb;
-            result.TR_RGB.center(i,:) = targetPosition_rgb;
-            result.TR_RGB.dist(i) = distance(1);
-            result.TR_RGB.IoU(i) = overlap_ratio(1);
-            result.TR_flow.bbox(i,:) = rectPosition_flow;
-            result.TR_flow.center(i,:) = targetPosition_flow;
-            result.TR_flow.dist(i) = distance(2);
-            result.TR_flow.IoU(i) = overlap_ratio(2);
-            
-            % fprintf(p.fout,'GT: %.2f, %.2f TR: %d,%d,%d,%d\n', round(bboxes(i, :)));
-            % fprintf(p.fout,'%d,%.2f,%.2f,%.2f\n', bboxes(i, :));
+            for ii=1:length(useNets)
+                rectPosition = [net(ii).targetPosition(i,[2,1]) - net(ii).targetSize(i,[2,1])/2, net(ii).targetSize(i,[2,1])];
+                fprintf(p.fout(ii),'%.2f,%.2f,%.2f,%.2f\n', rectPosition);
+            end
         end
-
     end
-    
-    result.TR_RGB.precision(i) = precision_auc(result.TR_RGB.center,...
-        result.GT.center, 0.5, nImgs);
-    result.TR_flow.precision(i) = precision_auc(result.TR_flow.center,...
-        result.GT.center, 0.5, nImgs);
-    
-    figure;
-    plot(1:nImgs,result.TR_RGB.dist,'g',1:nImgs,result.TR_flow.dist,'b');
-    title('Distance Plot')
-    legend('RGB Dist', 'flow Dist')
-    xlabel('frames')
-    ylabel('distance')
-    saveas(gcf,[p.save_path '_dist.png'])
-    
-    figure;
-    plot(1:nImgs,result.TR_RGB.IoU,'g',1:nImgs,result.TR_flow.IoU,'b');
-    title('IoU Plot')
-    legend('RGB IoU', 'flow IoU')
-    xlabel('frames')
-    ylabel('IoU %')
-    saveas(gcf,[p.save_path '_IoU.png'])
-    
-%     DataField = fieldnames(result);
-%     dlmwrite('myFile.txt', result, 'delimiter','\t','newline','pc')
-%     dlmwrite('FileName.txt', result.(DataField{1}));
-    % bboxes = bboxes(startFrame : i, :);
-    
+
     if p.visualization        
-        close(v_tracking);
+        close(result_video);
     end
-
+%     bboxes = bboxes(startFrame : i, :);
 end

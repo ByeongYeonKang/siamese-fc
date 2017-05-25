@@ -1,15 +1,13 @@
 function runAll_vot15
 
-    results = struct();
-    visualization = false;
+    visualization = true;
     gpus = 1;
 
-    seq_base_path = '../results/OTB/'; % (optional)
+    seq_base_path = '../results/VOT/'; % (optional)
     seq = clean_dir_only_folder(seq_base_path);
   
     for i=1:numel(seq)
-       results(i) = run_tracker(seq{i}, visualization, gpus);
-       results(i).seq_name = seq{i};
+       run_tracker(seq{i}, visualization, gpus);
     end
 end
 
