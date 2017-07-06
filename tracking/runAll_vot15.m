@@ -1,13 +1,31 @@
-function runAll_vot15
-
+function runAll_vot15(dataset, startSeq)
+    
     visualization = true;
     gpus = 1;
 
-    seq_base_path = '../results/VOT/'; % (optional)
-    seq = clean_dir_only_folder(seq_base_path);
+    switch dataset
+        case 'OTB'
+            RGB_path = '../dataset/OTB/';
+            flow_path = '../dataset/OTB_OF/';
+            save_path = '../results/OTB/';
+            save_name = 'RGB_base';
+        case 'VOT'
+            RGB_path = '../dataset/VOT/';
+            flow_path = '../dataset/VOT_OF/';
+            save_path = '../results/VOT/';
+            save_name = 'RGB_base';
+    end
+    
+    path = struct();
+    path.RGB_path = RGB_path;
+    path.flow_path = flow_path;
+    path.save_path = save_path;
+    path.save_name = save_name;    
+    seq = clean_dir_only_folder(path.RGB_path);
   
-    for i=1:numel(seq)
-       run_tracker(seq{i}, visualization, gpus);
+    for i=startSeq:numel(seq)
+        seq{i}
+        run_tracker(path, dataset, seq{i}, visualization, gpus);
     end
 end
 

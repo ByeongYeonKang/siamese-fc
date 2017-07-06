@@ -2,7 +2,7 @@
 function display_net(net, inputs, name)
 %DISPLAY_NET
 %   Saves and display a pdf with the DAG structure of the network
-%
+%   ex. display_net(net,inputs = {'exemplar', [127,127,3,8], 'instance', [255,255,3,8]},'siam');
 %   Luca Bertinetto, Jack Valmadre, Joao F. Henriques, 2016
 % -------------------------------------------------------------------------------------------------------------------------
     if strcmp(class(net), 'struct')

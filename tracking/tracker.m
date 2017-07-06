@@ -10,16 +10,17 @@ function bboxes = tracker(varargin)
     % These are the default hyper-params for SiamFC-3S
     % The ones for SiamFC (5 scales) are in params-5s.txt
     %% file name
+    p.path = struct();
     p.net_rgb= ' ';
     p.net_flow= ' ';
     p.stats_rgb_path= ' ';
     p.stats_flow_path= ' ';
     %% execution, visualization, benchmark
+    p.dataset = 'OTB';
     p.video = 'bag';
     p.visualization = false;
     p.gpus = [];
     %%
-    p.subMean = true;
     p.bbox_output = false;
     p.video_output = false;
     p.fout = -1;
@@ -28,8 +29,12 @@ function bboxes = tracker(varargin)
     p.instanceSize = 255;  % input x size (search region)
     p.scoreSize = 17;
     p.totalStride = 8;
-    p.contextAmount = 0.5; % context amount for the exemplar
+    p.contextAmount = 0.3; % context amount for the exemplar
     p.subMean = false;
+    %% stack size for motion information
+    p.Stack = true;
+    p.LSize = 3; 
+    p.LInterVal = 1;
     %% SiamFC prefix and ids
     p.prefix_z = 'a_'; % used to identify the layers of the exemplar
     p.prefix_x = 'b_'; % used to identify the layers of the instance
@@ -43,15 +48,17 @@ function bboxes = tracker(varargin)
     % Get environment-specific default paths.
     p = env_paths_tracking(p);
     p = params_3s(p);
-    % p = params_5s(p);
+    %p = params_5s(p);
     
     %% init u can select option, rgb or flow or two-stream(rgb and flow)
     net = struct();
-    useNets = {'RGB', 'flow'};
-    net_path = {[p.net_base_path p.net_rgb] ,[p.net_base_path p.net_flow]}; 
-    stats_path = {p.stats_rgb_path, p.stats_flow_path};
-    data_path = {p.data_rgb_path, p.data_flow_path};
-    bbox_path = {p.rgb_bbox, p.flow_bbox};
+    %useNets = {'SiamFC', p.path.save_name};
+    useNets = {'SiamFC'};
+    net_path = {[p.net_base_path p.net] ,[p.net_base_path p.net_flow]}; 
+    %stats_path = {p.stats_rgb_path, p.stats_flow_path};
+    %data_path = {p.path.RGB_path, p.path.flow_path};
+    stats_path = {p.stats_flow_path, p.stats_flow_path};
+    data_path = {p.path.flow_path, p.path.flow_path};
     for i=1:length(useNets)
         net(i).name = useNets{i};
         net(i).path = net_path{i};
@@ -61,6 +68,12 @@ function bboxes = tracker(varargin)
     
     %% init model setting 
     for i= 1:length(useNets)
+        % get the first frame of the video
+        startFrame = 1;
+        switch p.video
+            case 'David'
+                startFrame = 300; 
+        end
         % Load ImageNet Video statistics
         if exist(net(i).stats_path,'file')
             net(i).stats = load(net(i).stats_path);
@@ -73,8 +86,9 @@ function bboxes = tracker(varargin)
         net_z(i) = load_pretrained(net(i).path, []);
         net_x(i) = load_pretrained(net(i).path, []);
         
-        [net(i).imgFiles, net(i).targetPosition(1,:), net(i).targetSize(1,:)] = load_video_info(net(i).data_path, p.video);
-        
+        [net(i).imgFiles, net(i).targetPosition(1,:), net(i).targetSize(1,:), net(i).ground_truth] = load_video_info(net(i).data_path, p.dataset, p.video, startFrame);
+        frames = size(net(i).ground_truth,1);
+        net(i).endFrame = startFrame+frames-1;
         % [imgFiles(i), targetPosition(i), targetSize(i), video_path] = load_video_info2(p.seq_base_path, p.gt);
         
         % Divide the net in 2
@@ -87,8 +101,6 @@ function bboxes = tracker(varargin)
         zFeatId = net_z(i).getVarIndex(p.id_feat_z);
         scoreId = net_x(i).getVarIndex(p.id_score);
 
-        % get the first frame of the video
-        startFrame = 1;
         net(i).nImgs = numel(net(i).imgFiles);
         im = gpuArray(single(net(i).imgFiles{startFrame}));
         
@@ -105,10 +117,26 @@ function bboxes = tracker(varargin)
         s_z = sqrt(wc_z*hc_z);
         scale_z = p.exemplarSize / s_z;
         % initialize the exemplar
-        [z_crop, ~] = get_subwindow_tracking(im, net(i).targetPosition, [p.exemplarSize p.exemplarSize], [round(s_z) round(s_z)], net(i).avgChans);
-        if p.subMean
+        if p.Stack && i==1
+            stack_ind = 3-(p.LInterVal*(p.LSize-1)):p.LInterVal:3;
+            % stack_ind = 1 + startFrame;
+            for s=1:length(stack_ind)
+                im = gpuArray(single(net(i).imgFiles{stack_ind(s)}));
+                % if grayscale repeat one channel to match filters size
+                if(size(im, 3)==1)
+                    im = repmat(im, [1 1 3]);
+                end
+                [z_crop(:,:,1+(s-1)*3:s*3), ~] = get_subwindow_tracking(im, net(i).targetPosition, [p.exemplarSize p.exemplarSize], [round(s_z) round(s_z)], net(i).avgChans);
+            end       
+            t_alpha= 50>mean(mean(var(z_crop(:,:,:))))
+        else 
+            [z_crop, ~] = get_subwindow_tracking(im, net(i).targetPosition, [p.exemplarSize p.exemplarSize], [round(s_z) round(s_z)], net(i).avgChans);
+        end
+               
+        if p.subMean && i==1
             z_crop = bsxfun(@minus, z_crop, reshape(net(i).stats.z.rgbMean, [1 1 3]));
         end
+        
         d_search = (p.instanceSize - p.exemplarSize)/2;
         pad = d_search/scale_z;
         net(i).s_x(1) = s_z + 2*pad;
@@ -125,56 +153,109 @@ function bboxes = tracker(varargin)
         % make the window sum 1
         window = window / sum(window(:));
         scales = (p.scaleStep .^ ((ceil(p.numScale/2)-p.numScale) : floor(p.numScale/2)));
+ %       deb_save_name = [p.path.save_path 'bad_env/' p.video '_exemplar.jpg']; 
+ %       imwrite(gather(z_crop)/255,deb_save_name);    
         % evaluate the offline-trained network for exemplar z features
+        
+        figure(1); clf; subplot(1,3,1); h1= imshow(z_crop(:,:,1:3)/255); axis off; axis image; title('flow(t-3,t-2)');
+        figure(1); subplot(1,3,2); h2= imshow(z_crop(:,:,4:6)/255); axis off; axis image; title('flow(t-2,t-1)');
+        figure(1); subplot(1,3,3); h3= imshow(z_crop(:,:,7:9)/255); axis off; axis image; title('flow(t-1,t)');
+         
         net_z(i).eval({'exemplar', z_crop});
         net(i).z_features = net_z(i).vars(zFeatId).value;
         net(i).z_features = repmat(net(i).z_features, [1 1 1 p.numScale]);
         
         net(i).bboxes = zeros(net(i).nImgs, 4);
-        if p.bbox_output 
-            p.fout(i) = fopen([p.save_path p.video '/' bbox_path{i}], 'w');
-        end
+%         if p.bbox_output 
+%             p.fout(i) = fopen([p.save_path p.video '/' bbox_path{i}], 'w');
+%         end
     end
     %% Init visualization for debug
-    p.save_path = [p.save_path p.video];
-    if ~isdir(p.save_path)
-        mkdir(p.save_path)
+    % p.save_path = [p.save_path p.video];
+    if ~isdir(p.path.save_path)
+        mkdir(p.path.save_path)
     end
     videoPlayer = [];
     if p.visualization && isToolboxAvailable('Computer Vision System Toolbox')
         videoPlayer = vision.VideoPlayer('Position', [100 100 [size(im,2), size(im,1)]+30]);
     end
     if p.video_output
-        result_video = VideoWriter([p.save_path '/results_videos_of']);
+        if ~isdir([p.path.save_path p.path.save_name '/video/'])
+            mkdir([p.path.save_path p.path.save_name '/video/'])
+        end
+        result_video = VideoWriter([p.path.save_path p.path.save_name '/video/' p.video '_' char(useNets(1))]);
         open(result_video);
     end
+    
     %% start tracking
     tic;
-    for i = startFrame:net(2).nImgs          
-        if i>startFrame
+    deb_save = 1;
+    %% nof = endFrame - startFrame;
+    for nof = startFrame:net(1).endFrame-10          
+        i = (nof-startFrame)+1;
+        if nof>startFrame
             % load new frame on GPU
-            % targetPosition, s_x, targetSize is pre-valued 
             for ii=1:length(useNets)
-%                 if ii==1
-%                     im = gpuArray(single(net(ii).imgFiles{i-1}));
-%                     [z_crop, ~] = get_subwindow_tracking(im, net(ii).targetPosition(i-1,:), [p.exemplarSize p.exemplarSize], [round(s_z) round(s_z)], net(ii).avgChans);
-%                     net_z(ii).eval({'exemplar', z_crop});
-%                     net(ii).z_features = net_z(ii).vars(zFeatId).value;
-%                     net(ii).z_features = repmat(net(ii).z_features, [1 1 1 p.numScale]);
-%                 end
-                im = gpuArray(single(net(ii).imgFiles{i}));
-                % if grayscale repeat one channel to match filters size
-                if(size(im, 3)==1)
-                    im = repmat(im, [1 1 3]);
+                if p.Stack && ii==1 && mod(i,16)==8
+                    %stack_ind = nof-(p.LInterVal*(p.LSize-1)):p.LInterVal:nof;
+                    stack_ind = nof-(3*(p.LSize-1)):3:nof;
+                    % stack_ind = nof-1;
+                    for s=1:length(stack_ind)
+                        im = gpuArray(single(net(1).imgFiles{stack_ind(s)-1}));
+                        % if grayscale repeat one channel to match filters size
+                        if(size(im, 3)==1)
+                            im = repmat(im, [1 1 3]);
+                        end
+                        [z_crop(:,:,1+(s-1)*3:s*3), ~] = get_subwindow_tracking(im, net(1).targetPosition((i-1),:), [p.exemplarSize p.exemplarSize], [round(s_z) round(s_z)], net(1).avgChans);
+                    end
+%                     t_alpha= 50>mean(mean(var(z_crop(:,:,:))))
+                    figure(1); clf; subplot(1,3,1); h1= imshow(z_crop(:,:,1:3)/255); axis off; axis image; title('flow(t-3,t-2)');
+                    figure(1); subplot(1,3,2); h2= imshow(z_crop(:,:,4:6)/255); axis off; axis image; title('flow(t-2,t-1)');
+                    figure(1); subplot(1,3,3); h3= imshow(z_crop(:,:,7:9)/255); axis off; axis image; title('flow(t-1,t)');
+                    net_z(1).eval({'exemplar', z_crop});   
+                    net(1).z_features = net_z(1).vars(zFeatId).value;
+                    net(1).z_features = repmat(net(1).z_features, [1 1 1 p.numScale]);
                 end
                 scaledInstance = net(ii).s_x(i-1) .* scales;
                 scaledTarget = [net(ii).targetSize(i-1,1) .* scales; net(ii).targetSize(i-1,2) .* scales];
-                % extract scaled crops for search region x at previous target position
-                [x_crops, net(ii).image_coord_roi, net(ii).score_coord_roi] = make_scale_pyramid(im, net(ii).targetPosition(i-1,:), scaledInstance, p.instanceSize, net(ii).avgChans, net(ii).stats, p);
                 % evaluate the offline-trained network for exemplar x features
-                [newTargetPosition, newScale, scoreMap] = tracker_eval(net_x(ii), round(net(ii).s_x(i-1)), scoreId, net(ii).z_features, x_crops, net(ii).targetPosition(i-1,:), window, p);
+                if strcmp(useNets(ii),'SiamFC')
+                    % extract scaled crops for search region x at previous target position
+                    im = gpuArray(single(net(ii).imgFiles{nof}));
+                    % if grayscale repeat one channel to match filters size
+                    if(size(im, 3)==1)
+                        im = repmat(im, [1 1 3]);
+                    end
+                    [net(ii).x_crops, net(ii).image_coord_roi, net(ii).score_coord_roi] = make_scale_pyramid(im, net(ii).targetPosition(i-1,:), scaledInstance, p.instanceSize, net(ii).avgChans, net(ii).stats, p);
+                    [newTargetPosition, newScale, scoreMap] = tracker_eval(net_x(ii), round(net(ii).s_x(i-1)), scoreId, net(ii).z_features, net(ii).x_crops, net(ii).targetPosition(i-1,:), window, p);
+                else
+                    im = gpuArray(single(net(1).imgFiles{nof}));
+                    if(size(im, 3)==1)
+                        im = repmat(im, [1 1 3]);
+                    end
+                    [net(ii).x_crops, net(ii).image_coord_roi, net(ii).score_coord_roi] = make_scale_pyramid(im, net(ii).targetPosition(i-1,:),...
+                        scaledInstance, p.instanceSize, net(ii).avgChans, net(ii).stats, p);
+                    [newTargetPosition, newScale, scoreMap] = tracker_eval(net_x(ii), round(net(ii).s_x(i-1)), scoreId, net(ii).z_features, net(ii).x_crops, net(ii).targetPosition(i-1,:), window, p);
+%                     [RGB_x_crops,] = make_scale_pyramid(im, net(ii).targetPosition(i-1,:), scaledInstance, p.instanceSize, net(ii).avgChans, net(ii).stats, p);
+%                     im = gpuArray(single(net(2).imgFiles{nof-1}));
+%                     if(size(im, 3)==1)
+%                         im = repmat(im, [1 1 3]);
+%                     end
+%                     [flow_x_crops, net(ii).image_coord_roi, net(ii).score_coord_roi] = make_scale_pyramid(im, net(ii).targetPosition(i-1,:),...
+%                         scaledInstance, p.instanceSize, net(ii).avgChans, net(ii).stats, p);
+%                     if p.subMean
+%                         flow_x_crops = bsxfun(@minus, flow_x_crops, reshape(net(ii).stats.z.rgbMean, [1 1 3]));
+%                     end
+%                     [newTargetPosition, newScale, scoreMap] = two_trackers_eval(net_x(1), net_x(2), round(net(2).s_x(i-1)), scoreId,...
+%                         net(1).z_features, net(2).z_features, RGB_x_crops, flow_x_crops, net(2).targetPosition(i-1,:), window, p, t_alpha);
+                end
+                
+                figure(2); clf; subplot(1,3,1); h4=imshow(net(ii).x_crops(:,:,:,1)/255); axis off; axis image; title('s_win(scale1)');
+                figure(2); subplot(1,3,2); h5=imshow(net(ii).x_crops(:,:,:,2)/255); axis off; axis image; title('s_win(scale2)');
+                figure(2); subplot(1,3,3); h6=imshow(net(ii).x_crops(:,:,:,3)/255); axis off; axis image; title('s_win(scale3)');
                 net(ii).targetPosition(i,:) = gather(newTargetPosition);
                 scoreMap = imresize(scoreMap, net(ii).image_coord_roi(5)/size(scoreMap,1));
+                pro_map = scoreMap;
                 scoreMap = scoreMap - min(scoreMap(:)) ;
                 scoreMap = scoreMap / max(scoreMap(:)) ;
                 N = 256;
@@ -184,6 +265,7 @@ function bboxes = tracker(varargin)
                 yy = net(ii).score_coord_roi(2): net(ii).score_coord_roi(4);
                 xx = net(ii).score_coord_roi(1): net(ii).score_coord_roi(3);
                 net(ii).map = scoreMap(yy,xx,:);
+                pro_map = pro_map(yy,xx,:);
                 
                 % scale damping and saturation
                 net(ii).s_x(i) = max(min_s_x, min(max_s_x, (1-p.scaleLR)*net(ii).s_x(i-1) + p.scaleLR*scaledInstance(newScale)));
@@ -202,26 +284,57 @@ function bboxes = tracker(varargin)
                     fprintf('Frame %d\n', startFrame+i);
                 end
             else
-                im = gpuArray(single(net(1).imgFiles{i}));
+                im = gpuArray(single(net(1).imgFiles{nof}));
                 im = gather(im)/255;
-                color = {'red', 'blue'};
+                color = {'red', 'blue','green'};
+                rectPosition = cvt_to_rect(net(1).ground_truth(i,:));
+                im = insertShape(im, 'Rectangle', gather(rectPosition), ...
+                        'LineWidth', 4, 'Color', color{3});
                 for ii=1:length(useNets)
                     rectPosition = [net(ii).targetPosition(i,[2,1]) - net(ii).targetSize(i,[2,1])/2, net(ii).targetSize(i,[2,1])];
                     im = insertShape(im, 'Rectangle', gather(rectPosition), ...
-                        'LineWidth', 6, 'Color', color{ii});
+                        'LineWidth', 4, 'Color', color{ii});
                 end
                 % Draw Search-region and score map
-                if i>startFrame
-                    z = 1;
-                    rect = net(z).image_coord_roi;
-                    alpha = 0.8;
+                if nof>startFrame
                     s_map = zeros(size(im));
-                    s_map(rect(2):rect(4),rect(1):rect(3),:)=net(z).map;
+                    ss_map = zeros(size(im,1),size(im,2));
+                    color = {'red','green'};
+                    for ii=1:length(useNets)
+                        rect = net(ii).image_coord_roi;
+                        s_map(rect(2):rect(4),rect(1):rect(3),:) = net(ii).map;
+                        im = insertShape(im, 'Rectangle', [rect(1), rect(2), rect(3)-rect(1), rect(4)-rect(2)], ...
+                        'LineWidth', 5, 'Color', color{ii});
+                    end
+                    alpha = 0.5;
                     im = im * (1-alpha) + s_map*alpha;
-                    im = insertShape(im, 'Rectangle', [rect(1), rect(2), rect(3)-rect(1), rect(4)-rect(2)], ...
-                        'LineWidth', 5, 'Color', 'green');
+                    
+                    rectPosition = cvt_to_rect(net(1).ground_truth(i,:));
+                    rl = [rectPosition(1), rectPosition(2), rectPosition(1)+rectPosition(3), rectPosition(2)+rectPosition(4)];
+                    if rl(1) < 1
+                        rl(1) = 1;
+                    end 
+                    if rl(2) < 1
+                        rl(2) = 1;
+                    end 
+                    if rl(3) > size(im,2)
+                        rl(3) = size(im,2);
+                    end
+                    if rl(4) > size(im,1)
+                        rl(4) = size(im,1);
+                    end 
+                    ss_map(rect(2):rect(4),rect(1):rect(3)) = pro_map;
+                    gt_mean = mean(mean(ss_map(rl(2):rl(4),rl(1):rl(3))));
+                    search_mean = mean(mean(ss_map));
+                    if gt_mean < 0.5 && deb_save
+                        net(ii).targetPosition(i,:) = [rectPosition(2)+rectPosition(4)/2, rectPosition(1)+rectPosition(3)/2]
+                        deb_save = 0;
+                        deb_save_name = [p.path.save_path 'bad_env/' p.video '.jpg']; 
+                        imwrite(im,deb_save_name);    
+                        deb_save_name = [p.path.save_path 'bad_env/' p.video '_search.jpg']; 
+                        imwrite(gather(net(1).x_crops(:,:,:,newScale))/255,deb_save_name);    
+                    end 
                 end
-                
                 % Display the annotated video frame using the video player object.
                 step(videoPlayer, im);
                 writeVideo(result_video, im);
@@ -230,7 +343,8 @@ function bboxes = tracker(varargin)
         if p.bbox_output
             for ii=1:length(useNets)
                 rectPosition = [net(ii).targetPosition(i,[2,1]) - net(ii).targetSize(i,[2,1])/2, net(ii).targetSize(i,[2,1])];
-                fprintf(p.fout(ii),'%.2f,%.2f,%.2f,%.2f\n', rectPosition);
+                net(ii).bboxes(i, :) = rectPosition;
+%                 fprintf(p.fout(ii),'%.2f,%.2f,%.2f,%.2f\n', rectPosition);
             end
         end
     end
@@ -238,5 +352,20 @@ function bboxes = tracker(varargin)
     if p.visualization        
         close(result_video);
     end
-%     bboxes = bboxes(startFrame : i, :);
+    % useNets = {'RGB', 'flow'};
+    for ii = 1:length(useNets)
+        results = cell(1,20);
+        results{1}.type = 'rect';
+        results{1}.res = net(ii).bboxes(1 : frames, :);
+        results{1}.len = frames;
+        results{1}.annoBegin = startFrame;
+        results{1}.startFrame = startFrame;
+        results{1}.anno = net(ii).ground_truth;
+        ss = p.video;
+        ss(1) = lower(ss(1));
+        save_name = [p.path.save_path p.path.save_name '/' ss '_' char(useNets(ii)) '.mat']; 
+        save(save_name,'results'); 
+    end
+    
+    
 end

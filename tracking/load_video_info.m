@@ -1,5 +1,5 @@
 % -------------------------------------------------------------------------------------------------
-function [imgs, pos, target_sz] = load_video_info(base_path, video)
+function [imgs, pos, target_sz, ground_truth] = load_video_info(base_path, dataset, video, startFrame)
 %LOAD_VOT_VIDEO_INFO
 %   Loads all the relevant information for the video in the given path:
 %   the list of image files (cell array of strings), initial position
@@ -15,9 +15,19 @@ function [imgs, pos, target_sz] = load_video_info(base_path, video)
 		base_path(end+1) = '/';
 	end
 	video_path = [base_path video '/'];
-
+    
+    switch dataset
+        case 'OTB'
+            video_path = [video_path 'img/'];
+            gt_name = 'groundtruth_rect.txt';
+        case 'VOT'
+            gt_name = 'groundtruth.txt';
+    end
+    
 	%load ground truth from text file
-	ground_truth = csvread([base_path '/' video '/' 'groundtruth.txt']);
+    ground_truth = dlmread([base_path '/' video '/' gt_name]);
+	% ground_truth = dlmread(['../dataset/anno/' lower(video) '.txt']);
+    % ground_truth = csvread([base_path '/' video '/' 'groundtruth_rect.txt']);
 	region = ground_truth(1, :);
 	[cx, cy, w, h] = get_axis_aligned_BB(region);
     pos = [cy cx]; % centre of the bounding box

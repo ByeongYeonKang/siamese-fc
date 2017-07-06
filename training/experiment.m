@@ -24,17 +24,17 @@ function [net, stats] = experiment(imdb_video, varargin)
     opts.numPairs =  5.32e4; % Number of example pairs per epoch, if empty, then equal to number of videos.
     opts.randomSeed = 0;
     opts.shuffleDataset = false; % do not shuffle the data to get reproducible experiments
-    opts.frameRange = 8; % range from the exemplar in which randomly pick the instance
-    opts.gpus = [];
+    opts.frameRange = 33; % range from the exemplar in which randomly pick the instance
+    opts.gpus = 1;
     opts.prefetch = false; % Both get_batch and cnn_train_dag depend on prefetch.
     opts.train.numEpochs = 100;
     opts.train.learningRate = logspace(-2, -5, opts.train.numEpochs);
     opts.train.weightDecay = 5e-4;
-    opts.train.batchSize = 16; % we empirically observed that small batches work better
+    opts.train.batchSize = 8; % we empirically observed that small batches work better
     opts.train.profile = false;
     % Data augmentation settings
-    opts.subMean = false;
-    opts.colorRange = 255;
+    opts.subMean = true;        % check
+    opts.colorRange = 255;      % check
     opts.augment.translate = true;
     opts.augment.maxTranslate = 4;
     opts.augment.stretch = true;
@@ -77,6 +77,8 @@ function [net, stats] = experiment(imdb_video, varargin)
 
     [net, derOutputs, label_inputs_fn] = setup_loss(net, resp_sz, resp_stride, opts.loss);
 
+    % fn = getBatchWrapper_ucf101_rgbflow(net.meta.normalization, opts.numFetchThreads, opts.train) ;
+    
     batch_fn = @(db, batch) get_batch(db, batch, ...
                                         imdb_video, ...
                                         opts.rootDataDir, ...
@@ -136,8 +138,12 @@ function net = make_net(opts)
     net = make_siameseFC(opts);
 
     % Save the net graph to disk.
-    inputs = {'exemplar', [opts.exemplarSize*[1 1] 3 opts.train.batchSize], ...
-              'instance', [opts.instanceSize*[1 1] 3 opts.train.batchSize]};
+%     inputs = {'RGB_exemplar', [opts.exemplarSize*[1 1] 3 opts.train.batchSize], ...
+%               'RGB_instance', [opts.instanceSize*[1 1] 3 opts.train.batchSize],...
+%               'OF_exemplar', [opts.exemplarSize*[1 1] 3 opts.train.batchSize], ...
+%               'OF_instance', [opts.instanceSize*[1 1] 3 opts.train.batchSize]};
+    inputs = {'exemplar', [opts.exemplarSize*[1 1] 6 opts.train.batchSize], ...
+              'instance', [opts.instanceSize*[1 1] 6 opts.train.batchSize]};
     net_dot = net.print(inputs, 'Format', 'dot');
     if ~exist(opts.expDir)
         mkdir(opts.expDir);
@@ -152,8 +158,13 @@ end
 function [resp_sz, resp_stride] = get_response_size(net, opts)
 % -------------------------------------------------------------------------------------------------
 
-    sizes = net.getVarSizes({'exemplar', [opts.exemplarSize*[1 1] 3 256], ...
-                             'instance', [opts.instanceSize*[1 1] 3 256]});
+%     sizes = net.getVarSizes({'RGB_exemplar', [opts.exemplarSize*[1 1] 3 256], ...
+%                              'RGB_instance', [opts.instanceSize*[1 1] 3 256], ...
+%                              'OF_exemplar', [opts.exemplarSize*[1 1] 3 256], ...
+%                              'OF_instance', [opts.instanceSize*[1 1] 3 256]});
+    sizes = net.getVarSizes({'exemplar', [opts.exemplarSize*[1 1] 6 256], ...
+                             'instance', [opts.instanceSize*[1 1] 6 256]});
+                         
     resp_sz = sizes{net.getVarIndex('score')}(1:2);
     rfs = net.getVarReceptiveFields('exemplar');
     resp_stride = rfs(net.getVarIndex('score')).stride(1);
@@ -245,13 +256,20 @@ function inputs = get_batch(db, batch, imdb_video, data_dir, use_gpu, sample_opt
 % Returns the inputs to the network.
 % -------------------------------------------------------------------------------------------------
 
+%     [imout_z, imout_x, of_imout_z, of_imout_x, labels, sizes_z, sizes_x] = vid_get_random_batch(...
+%         db, imdb_video, batch, data_dir, sample_opts);
     [imout_z, imout_x, labels, sizes_z, sizes_x] = vid_get_random_batch(...
         db, imdb_video, batch, data_dir, sample_opts);
     if use_gpu
         imout_z = gpuArray(imout_z);
         imout_x = gpuArray(imout_x);
+        %of_imout_z = gpuArray(of_imout_z);
+        %of_imout_x = gpuArray(of_imout_x);
     end
+    %cat(3,imout_z,of_imout_z);
+    %cat(3,imout_x,of_imout_x);
     % Constructs full label inputs from output of vid_get_random_batch.
     label_inputs = label_inputs_fn(labels, sizes_z, sizes_x);
+    %inputs = [{'RGB_exemplar', imout_z, 'RGB_instance', imout_x, 'OF_exemplar', of_imout_z, 'OF_instance', of_imout_x}, label_inputs];
     inputs = [{'exemplar', imout_z, 'instance', imout_x}, label_inputs];
 end

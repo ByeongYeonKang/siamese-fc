@@ -60,11 +60,14 @@ function [imout_z, imout_x, labels, sizes_z, sizes_x] = vid_get_random_batch(imd
     % final augmented crops
     imout_z = zeros(opts.exemplarSize, opts.exemplarSize, 3, batch_size, 'single');
     imout_x = zeros(opts.instanceSize, opts.instanceSize, 3, batch_size, 'single');
-
+%     % final augmented crops
+%     of_imout_z = zeros(opts.exemplarSize, opts.exemplarSize, 3, batch_size, 'single');
+%     of_imout_x = zeros(opts.instanceSize, opts.instanceSize, 3, batch_size, 'single');
+%     
     for i = 1:batch_size
         % Crops from same videos, centered on the object
         labels(i) = 1;
-        [objects.z{i}, objects.x{i}] = choose_pos_pair(imdb_video, ids_pairs(i), opts.frameRange);
+        [objects.z{i}, objects.x{i} objects.z2{i} objects.z3{i} objects.z4{i}] = choose_pos_pair(imdb_video, ids_pairs(i), opts.frameRange);
     end
 
     % get absolute paths of crops locations
@@ -72,8 +75,21 @@ function [imout_z, imout_x, labels, sizes_z, sizes_x] = vid_get_random_batch(imd
         crops_z_string{i} = [strrep(fullfile(data_dir, objects.z{i}.frame_path), '.JPEG','') '.' num2str(objects.z{i}.track_id, '%02d') '.crop.z.jpg'];
         crops_x_string{i} = [strrep(fullfile(data_dir, objects.x{i}.frame_path), '.JPEG','') '.' num2str(objects.x{i}.track_id, '%02d') '.crop.x.jpg'];
     end
-    % prepare all the files to read
-    files = [crops_z_string crops_x_string];
+    
+    for i=1:batch_size
+        crops_z_string2{i} = [strrep(fullfile(data_dir, objects.z2{i}.frame_path), '.JPEG','') '.' num2str(objects.z{i}.track_id, '%02d') '.crop.z.jpg'];
+    end
+    for i=1:batch_size
+        crops_z_string3{i} = [strrep(fullfile(data_dir, objects.z3{i}.frame_path), '.JPEG','') '.' num2str(objects.z{i}.track_id, '%02d') '.crop.z.jpg'];
+    end
+    for i=1:batch_size
+        crops_z_string4{i} = [strrep(fullfile(data_dir, objects.z4{i}.frame_path), '.JPEG','') '.' num2str(objects.z{i}.track_id, '%02d') '.crop.z.jpg'];
+    end
+%     % prepare all the files to read
+%     of_crops_z_string = strrep(crops_z_string,'_OF','');
+%     of_crops_x_string = strrep(crops_x_string,'_OF','');
+%     files = [crops_z_string crops_x_string of_crops_z_string of_crops_x_string];
+     files = [crops_z_string crops_x_string crops_z_string2 crops_z_string3 crops_z_string4];
 
     % prefetch is used to load images in a separate thread
     if opts.prefetch
@@ -82,8 +98,12 @@ function [imout_z, imout_x, labels, sizes_z, sizes_x] = vid_get_random_batch(imd
 
     % read all the crops efficiently
     crops = vl_imreadjpeg(files, 'numThreads', opts.numThreads);
-    crops_z = crops(1:batch_size);
-    crops_x = crops(batch_size+1 : end);
+    batch_ind = [batch_size batch_size*2 batch_size*3 batch_size*4];
+    crops_z = crops(1:batch_ind(1));
+    crops_x = crops(batch_ind(1)+1 : batch_ind(2));
+    crops_z2 = crops(batch_ind(2)+1 : batch_ind(3));
+    crops_z3 = crops(batch_ind(3)+1 : batch_ind(4));
+    crops_z4 = crops(batch_ind(4)+1 : end);
     clear crops
     % -----------------------------------------------------------------------------------------------------------------------
     % Data augmentation
@@ -105,34 +125,54 @@ function [imout_z, imout_x, labels, sizes_z, sizes_x] = vid_get_random_batch(imd
 
         tmp_z = aug_z(crops_z{i});
         tmp_x = aug_x(crops_x{i});
-
+        tmp_z2 = aug_z(crops_z2{i});
+        tmp_z3 = aug_z(crops_z3{i});
+        tmp_z4 = aug_z(crops_z4{i});
+        
         switch pair_types_rgb(i)
             case RGB
                 imout_z(:,:,:,i) = tmp_z;
                 imout_x(:,:,:,i) = tmp_x;
+                imout_z2(:,:,:,i) = tmp_z2;
+                imout_z3(:,:,:,i) = tmp_z3;
+                imout_z4(:,:,:,i) = tmp_z4;
             case GRAY
                 % vl_imreadjpeg returns images in [0, 255] with class single.
                 imout_z(:,:,:,i) = repmat(rgb2gray(tmp_z/255)*255, [1 1 3]);
                 imout_x(:,:,:,i) = repmat(rgb2gray(tmp_x/255)*255, [1 1 3]);
+                imout_z2(:,:,:,i) = repmat(rgb2gray(tmp_z2/255)*255, [1 1 3]);
+                imout_z3(:,:,:,i) = repmat(rgb2gray(tmp_z3/255)*255, [1 1 3]);
+               imout_z4(:,:,:,i) = repmat(rgb2gray(tmp_z4/255)*255, [1 1 3]);
         end
-
-        if opts.subMean
-            % Sanity check - mean should be in range 0-255!
-            means = [opts.stats.rgbMean_z(:); opts.stats.rgbMean_x(:)];
-            lower = 0.2 * 255;
-            upper = 0.8 * 255;
-            if ~all((lower <= means) & (means <= upper))
-                error('mean does not seem to for pixels in 0-255');
-            end
-            imout_z = bsxfun(@minus, imout_z, reshape(opts.stats.rgbMean_z, [1 1 3]));
-            imout_x = bsxfun(@minus, imout_x, reshape(opts.stats.rgbMean_x, [1 1 3]));
-        end
-        imout_z = imout_z / 255 * opts.colorRange;
-        imout_x = imout_x / 255 * opts.colorRange;
     end
-
+    
+    if opts.subMean
+        % Sanity check - mean should be in range 0-255!
+        means = [opts.stats.rgbMean_z(:); opts.stats.rgbMean_x(:)];
+        lower = 0.2 * 255;
+        upper = 0.8 * 255;
+        if ~all((lower <= means) & (means <= upper))
+            error('mean does not seem to for pixels in 0-255');
+        end
+        imout_z = bsxfun(@minus, imout_z, reshape(opts.stats.rgbMean_z, [1 1 3]));
+        imout_x = bsxfun(@minus, imout_x, reshape(opts.stats.rgbMean_x, [1 1 3]));
+        imout_z2 = bsxfun(@minus, imout_z2, reshape(opts.stats.rgbMean_z, [1 1 3]));
+        imout_z3 = bsxfun(@minus, imout_z3, reshape(opts.stats.rgbMean_z, [1 1 3]));
+        imout_z4 = bsxfun(@minus, imout_z4, reshape(opts.stats.rgbMean_z, [1 1 3]));
+    end
+    
+    imout_z = imout_z / 255 * opts.colorRange;
+    imout_x = imout_x / 255 * opts.colorRange;
+    imout_z2 = imout_z2 / 255 * opts.colorRange;
+    imout_z3 = imout_z3 / 255 * opts.colorRange;
+    imout_z4 = imout_z4 / 255 * opts.colorRange;
+    
+    imout_z_1 = cat(3, imout_z,imout_z2);
+    imout_z_2 = cat(3, imout_z3,imout_z4);
+    imout_z = cat(3, imout_z_1,imout_z_2);
     sizes_z = zeros(2, batch_size);
     sizes_x = zeros(2, batch_size);
+    
     for i = 1:batch_size
         if ~(labels(i) > 0)
             continue
@@ -147,7 +187,7 @@ function [imout_z, imout_x, labels, sizes_z, sizes_x] = vid_get_random_batch(imd
 end
 
 % -----------------------------------------------------------------------------------------------------------------------
-function [z, x] = choose_pos_pair(imdb_video, rand_vid, frameRange)
+function [z, x, z2, z3, z4] = choose_pos_pair(imdb_video, rand_vid, frameRange)
 % Get positive pair with crops from same videos, centered on the object
 % -----------------------------------------------------------------------------------------------------------------------
     valid_trackids = find(imdb_video.valid_trackids(:, rand_vid) > 1);
@@ -155,6 +195,7 @@ function [z, x] = choose_pos_pair(imdb_video, rand_vid, frameRange)
     rand_trackid_z = datasample(valid_trackids, 1);
     % pick valid exemplar from the random trackid
     rand_z = datasample(imdb_video.valid_per_trackid{rand_trackid_z, rand_vid}, 1);
+    % rand_z = datasample(imdb_video.valid_per_trackid{1, rand_vid}, 1);
     % pick valid instance within frameRange seconds from the exemplar, excluding the exemplar itself
     possible_x_pos = (1:numel(imdb_video.valid_per_trackid{rand_trackid_z, rand_vid}));
     [~, rand_z_pos] = ismember(rand_z, imdb_video.valid_per_trackid{rand_trackid_z, rand_vid});
@@ -163,7 +204,22 @@ function [z, x] = choose_pos_pair(imdb_video, rand_vid, frameRange)
     assert(~isempty(possible_x), 'No valid x for the chosen z.');
     rand_x = datasample(possible_x, 1);
     assert(imdb_video.objects{rand_vid}{rand_x}.valid, 'error picking rand x.');
+    % stack_size = 3;
     z = imdb_video.objects{rand_vid}{rand_z};
+    ind = find(imdb_video.valid_per_trackid{rand_trackid_z,rand_vid}==rand_z);
+    if (ind+3) < size(imdb_video.valid_per_trackid{rand_trackid_z,rand_vid},2)
+        z2 = imdb_video.objects{rand_vid}{imdb_video.valid_per_trackid{rand_trackid_z,rand_vid}(ind+1)};
+        z3 = imdb_video.objects{rand_vid}{imdb_video.valid_per_trackid{rand_trackid_z,rand_vid}(ind+2)};
+        z4 = imdb_video.objects{rand_vid}{imdb_video.valid_per_trackid{rand_trackid_z,rand_vid}(ind+3)};
+    else
+        z2 = z;
+        z3 = z;
+        z4 = z;
+    end 
+%     
+%     for l=1:stack_size        
+%         z{l} = imdb_video.objects{rand_vid}{rand_z+l-1};
+%     end
     x = imdb_video.objects{rand_vid}{rand_x};
 end
 

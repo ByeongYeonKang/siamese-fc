@@ -1,4 +1,3 @@
-
 % ----------------------------------------------------------------------------------------------------------------
 function [net, fixed_label_size] = vid_create_net_small2(varargin)
 % Very similar to vanilla AlexNet from MatConvNet examples,
